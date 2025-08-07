@@ -41,7 +41,7 @@ A sophisticated multi-agent AI system for analyzing Indian NSE-listed stocks usi
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/rooneyrulz/agentic-stock-research-system
    cd nse-stock-research-system
    ```
 
