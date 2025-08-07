@@ -8,6 +8,7 @@ dependencies = [
     "black>=25.1.0",
     "flake8>=7.3.0",
     "langchain>=0.3.27",
+    "langchain-groq>=0.3.7",
     "langchain-mcp-adapters>=0.1.9",
     "langchain-openai>=0.3.28",
     "langgraph>=0.6.3",
