@@ -1,0 +1,20 @@
+[project]
+name = "stock-market-researcher"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "black>=25.1.0",
+    "flake8>=7.3.0",
+    "langchain>=0.3.27",
+    "langchain-mcp-adapters>=0.1.9",
+    "langchain-openai>=0.3.28",
+    "langgraph>=0.6.3",
+    "langgraph-supervisor>=0.0.29",
+    "pandas>=2.3.1",
+    "plotly>=6.2.0",
+    "pytest>=8.4.1",
+    "python-dotenv>=1.1.1",
+    "streamlit>=1.48.0",
+]
