@@ -10,20 +10,25 @@ from datetime import datetime
 from dotenv import load_dotenv
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
-from langchain.chat_models import init_chat_model
+
+# from langchain.chat_models import init_chat_model
 from langgraph_supervisor import create_supervisor
+from langchain_groq import ChatGroq
 
 load_dotenv()
+
 
 class StockAction(Enum):
     BUY = "BUY"
     SELL = "SELL"
     HOLD = "HOLD"
 
+
 class NewsSentiment(Enum):
     POSITIVE = "POSITIVE"
     NEGATIVE = "NEGATIVE"
     NEUTRAL = "NEUTRAL"
+
 
 @dataclass
 class StockRecommendation:
@@ -38,6 +43,7 @@ class StockRecommendation:
     news_sentiment: NewsSentiment
     volume_analysis: str
 
+
 @dataclass
 class MarketData:
     symbol: str
@@ -51,54 +57,77 @@ class MarketData:
     trend_7d: str
     trend_30d: str
 
+
 class StockResearchSystem:
     def __init__(self, bright_data_api_token: str, openai_api_key: str):
         self.bright_data_api_token = bright_data_api_token
         self.openai_api_key = openai_api_key
         self.client = None
         self.supervisor = None
-    
+
     async def initialize(self):
         """Initialize the MCP client and supervisor"""
-        self.client = MultiServerMCPClient({
-            "bright_data": {
-                "command": "npx",
-                "args": ["@brightdata/mcp"],
-                "env": {
-                    "API_TOKEN": self.bright_data_api_token,
-                    "WEB_UNLOCKER_ZONE": os.getenv("WEB_UNLOCKER_ZONE", "unblocker"),
-                    "BROWSER_ZONE": os.getenv("BROWSER_ZONE", "scraping_browser")
+        self.client = MultiServerMCPClient(
+            {
+                "bright_data": {
+                    "command": "npx",
+                    "args": ["@brightdata/mcp"],
+                    "env": {
+                        "API_TOKEN": self.bright_data_api_token,
+                        "WEB_UNLOCKER_ZONE": os.getenv(
+                            "WEB_UNLOCKER_ZONE", "unblocker"
+                        ),
+                        "BROWSER_ZONE": os.getenv("BROWSER_ZONE", "scraping_browser"),
+                    },
+                    "transport": "stdio",
                 },
-                "transport": "stdio",
-            },
-        })
-        
-        tools = await self.client.get_tools()
-        model = init_chat_model(
-            model="openai:gpt-4o-mini", 
-            api_key=self.openai_api_key
+            }
         )
-        
+
+        tools = await self.client.get_tools()
+        model = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            api_key=self.openai_api_key,
+        )
+
         # Create specialized agents
         stock_finder_agent = self._create_stock_finder_agent(model, tools)
         market_data_agent = self._create_market_data_agent(model, tools)
         news_analyst_agent = self._create_news_analyst_agent(model, tools)
         recommendation_agent = self._create_recommendation_agent(model, tools)
-        
-        # Create supervisor
+
+        # Create supervisor (also needs a tools-capable Groq model)
         self.supervisor = create_supervisor(
-            model=init_chat_model(model="openai:gpt-4o-mini", api_key=self.openai_api_key),
-            agents=[stock_finder_agent, market_data_agent, news_analyst_agent, recommendation_agent],
+            model=ChatGroq(
+                model="llama-3.3-70b-versatile",
+                api_key=self.openai_api_key,
+            ),
+            agents=[
+                stock_finder_agent,
+                market_data_agent,
+                news_analyst_agent,
+                recommendation_agent,
+            ],
             prompt=self._get_supervisor_prompt(),
             add_handoff_back_messages=True,
             output_mode="full_history",
         ).compile()
-    
+
     def _create_stock_finder_agent(self, model, tools):
         prompt = """
         You are an expert NSE (National Stock Exchange) stock research analyst with deep knowledge of the Indian equity market.
         
         Your mission: Identify 2-3 high-potential, actively traded NSE-listed stocks suitable for short-term trading (1-7 days).
+
+        IMPORTANT TOOLING INSTRUCTIONS:
+        - You may ONLY use the tools that are explicitly provided to you by the system.
+        - You DO NOT have access to any tool named 'brave_search' or similar web search tools.
+        - Never attempt to call a tool named 'brave_search'. If you need data, use only the available tools.
+        - NEVER invent new tool names (for example, do NOT call any tool named 'search_engine', 'scrape_batch', or similar).
+        - If a tool name is not already present in the tool list provided by the system, you MUST NOT call it.
+        - If no listed tool is appropriate, answer using your own market knowledge and reasoning instead of calling a non-existent tool.
+        - NEVER invent new tool names (for example, do NOT call any tool named 'scrape_batch' or similar).
+        - If no listed tool is appropriate, answer using your own reasoning instead of calling a non-existent tool.
         
         SELECTION CRITERIA:
         • Focus on large-cap and mid-cap stocks (avoid penny stocks < ₹50)
@@ -129,14 +158,19 @@ class StockResearchSystem:
         
         Be data-driven and provide clear rationale for each selection.
         """
-        
+
         return create_react_agent(
             model, tools, prompt=prompt, name="stock_finder_agent"
         )
-    
+
     def _create_market_data_agent(self, model, tools):
         prompt = """
         You are a quantitative market data analyst specializing in NSE-listed stocks.
+
+        IMPORTANT TOOLING INSTRUCTIONS:
+        - You may ONLY use the tools that are explicitly provided to you by the system.
+        - You DO NOT have access to any tool named 'brave_search' or similar web search tools.
+        - Never attempt to call a tool named 'brave_search'. If you need data, use only the available tools.
         
         Given stock symbols, gather comprehensive real-time market data:
         
@@ -192,14 +226,17 @@ class StockResearchSystem:
         
         Provide accurate, up-to-date data with clear interpretation.
         """
-        
-        return create_react_agent(
-            model, tools, prompt=prompt, name="market_data_agent"
-        )
-    
+
+        return create_react_agent(model, tools, prompt=prompt, name="market_data_agent")
+
     def _create_news_analyst_agent(self, model, tools):
         prompt = """
         You are a financial news analyst with expertise in Indian stock market sentiment analysis.
+
+        IMPORTANT TOOLING INSTRUCTIONS:
+        - You may ONLY use the tools that are explicitly provided to you by the system.
+        - You DO NOT have access to any tool named 'brave_search' or similar web search tools.
+        - Never attempt to call a tool named 'brave_search'. If you need data, use only the available tools.
         
         For each given stock, research and analyze:
         
@@ -245,14 +282,19 @@ class StockResearchSystem:
         
         Focus on factual analysis and avoid speculation. Clearly distinguish between confirmed news and rumors.
         """
-        
+
         return create_react_agent(
             model, tools, prompt=prompt, name="news_analyst_agent"
         )
-    
+
     def _create_recommendation_agent(self, model, tools):
         prompt = """
         You are a senior trading strategist providing actionable investment recommendations for NSE stocks.
+
+        IMPORTANT TOOLING INSTRUCTIONS:
+        - You may ONLY use the tools that are explicitly provided to you by the system.
+        - You DO NOT have access to any tool named 'brave_search' or similar web search tools.
+        - Never attempt to call a tool named 'brave_search'. If you need data, use only the available tools.
         
         Synthesize all available data to generate precise trading recommendations:
         
@@ -314,11 +356,11 @@ class StockResearchSystem:
         
         Provide specific, actionable advice with clear entry/exit points and risk management guidelines.
         """
-        
+
         return create_react_agent(
             model, tools, prompt=prompt, name="recommendation_agent"
         )
-    
+
     def _get_supervisor_prompt(self):
         return """
         You are an expert supervisor orchestrating a comprehensive NSE stock research and recommendation system.
@@ -343,111 +385,134 @@ class StockResearchSystem:
         • Provide specific entry/exit prices
         • Include risk management guidelines
         • Ensure recommendations are actionable for next trading day
+
+        IMPORTANT TOOLING INSTRUCTIONS:
+        - You may ONLY use the tools that are explicitly provided to you by the system.
+        - You DO NOT have access to any tool named 'brave_search' or similar web search tools.
+        - Never attempt to call a tool named 'brave_search'. If you need data, use only the available tools.
         
         Complete the entire workflow without asking for user confirmation between steps.
         """
-    
+
     async def analyze_stocks(self, user_query: str = None) -> Dict[str, Any]:
         """Main method to run the complete stock analysis workflow"""
         if not self.supervisor:
             await self.initialize()
-        
+
         if not user_query:
             user_query = "Provide comprehensive stock analysis and trading recommendations for promising NSE-listed stocks suitable for short-term trading in the current market conditions."
-        
+
         # Store all messages for processing
         all_messages = []
-        
-        async for chunk in self.supervisor.astream({
-            "messages": [{
-                "role": "user", 
-                "content": user_query
-            }]
-        }):
+
+        # Increase recursion limit to avoid premature GraphRecursionError
+        # when agents take many tool-calling steps before finishing.
+        async for chunk in self.supervisor.astream(
+            {"messages": [{"role": "user", "content": user_query}]},
+            config={"recursion_limit": 60},
+        ):
             all_messages.append(chunk)
-        
+
         # Extract final results
         final_chunk = all_messages[-1] if all_messages else {}
         final_messages = final_chunk.get("supervisor", {}).get("messages", [])
-        
+
         return {
             "status": "completed",
             "timestamp": datetime.now().isoformat(),
             "messages": final_messages,
-            "raw_output": all_messages
+            "raw_output": all_messages,
         }
-    
+
     def format_results_for_display(self, results: Dict[str, Any]) -> str:
         """Format the analysis results for better display"""
         if not results.get("messages"):
             return "No analysis results available."
-        
+
         # Extract the final message content
         final_messages = results["messages"]
         if not final_messages:
             return "Analysis completed but no recommendations generated."
-        
+
         # Get the last assistant message which should contain recommendations
         for message in reversed(final_messages):
-            if hasattr(message, 'content') and message.content:
+            if hasattr(message, "content") and message.content:
                 return str(message.content)
-            elif isinstance(message, dict) and message.get('content'):
-                return str(message['content'])
-        
+            elif isinstance(message, dict) and message.get("content"):
+                return str(message["content"])
+
         return "Analysis completed. Please check the detailed output."
+
 
 # Utility functions for the Streamlit app
 def pretty_print_message(message, indent=False):
     """Pretty print a single message"""
-    if hasattr(message, 'pretty_repr'):
+    if hasattr(message, "pretty_repr"):
         pretty_message = message.pretty_repr(html=True)
     else:
         pretty_message = str(message)
-    
+
     if indent:
         indented = "\n".join("\t" + line for line in pretty_message.split("\n"))
         return indented
     return pretty_message
 
+
 def extract_recommendations(final_messages) -> List[Dict[str, Any]]:
     """Extract structured recommendations from the final messages"""
     recommendations = []
-    
+
     # This is a simplified parser - you might want to enhance this
     # based on the actual output format of your agents
-    
+
     for message in final_messages:
         content = ""
-        if hasattr(message, 'content'):
+        if hasattr(message, "content"):
             content = str(message.content)
-        elif isinstance(message, dict) and message.get('content'):
-            content = str(message['content'])
-        
+        elif isinstance(message, dict) and message.get("content"):
+            content = str(message["content"])
+
         # Look for recommendation patterns in the content
         if "RECOMMENDATION:" in content and "TARGET PRICE:" in content:
             # Parse the recommendation (this is a basic example)
-            lines = content.split('\n')
+            lines = content.split("\n")
             rec = {}
-            
+
             for line in lines:
                 if "STOCK_SYMBOL" in line or "Symbol:" in line:
-                    rec['symbol'] = line.split(':')[-1].strip()
+                    rec["symbol"] = line.split(":")[-1].strip()
                 elif "RECOMMENDATION:" in line:
-                    rec['action'] = line.split(':')[-1].strip()
+                    rec["action"] = line.split(":")[-1].strip()
                 elif "TARGET PRICE:" in line:
-                    price_str = line.split(':')[-1].strip().replace('₹', '')
+                    price_str = line.split(":")[-1].strip().replace("₹", "")
                     try:
-                        rec['target_price'] = float(price_str)
+                        rec["target_price"] = float(price_str)
                     except:
-                        rec['target_price'] = price_str
+                        rec["target_price"] = price_str
                 elif "Current Price:" in line:
-                    price_str = line.split(':')[-1].strip().replace('₹', '')
+                    price_str = line.split(":")[-1].strip().replace("₹", "")
                     try:
-                        rec['current_price'] = float(price_str)
+                        rec["current_price"] = float(price_str)
                     except:
-                        rec['current_price'] = price_str
-            
+                        rec["current_price"] = price_str
+
             if rec:
                 recommendations.append(rec)
-    
+
     return recommendations
+
+
+# async def run(bright_data_api_key, openai_api_key, user_query):
+#     system = StockResearchSystem(bright_data_api_key, openai_api_key)
+#     result = await system.analyze_stocks(user_query)
+#     print(result)
+
+
+# # helper function to run analyze-stocks
+# if __name__ == "__main__":
+#     groq_api_key = ""
+#     brightdata_api_key = (
+#         ""
+#     )
+#     user_query = "find a top 3 stocks to trade for short term"
+#     asyncio.run(run(brightdata_api_key, groq_api_key, user_query))

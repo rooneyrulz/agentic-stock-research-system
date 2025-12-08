@@ -8,6 +8,8 @@ langgraph_supervisor
 plotly
 pandas
 python-dotenv
+pydantic
+pydantic-settings
 
 # For development
 black
