@@ -1,6 +1,6 @@
 from typing import Optional
 from core.config import SystemConfig
-from core.model_config import ModelConfig
+from app.core.model_config import ModelConfig
 
 
 def load_config(env_file: str = ".env") -> SystemConfig:

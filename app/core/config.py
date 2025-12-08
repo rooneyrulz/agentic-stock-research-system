@@ -9,8 +9,8 @@ from typing import Optional
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from core.model_config import ModelConfig
-from core.mcp_config import MCPConfig
+from app.core.model_config import ModelConfig
+from app.core.mcp_config import MCPConfig
 
 
 # MAIN SYSTEM CONFIGURATION
