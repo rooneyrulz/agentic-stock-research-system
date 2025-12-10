@@ -1,10 +1,3 @@
-"""
-Configuration management for the stock research system.
-Centralized configuration with environment variable support and validation.
-
-Uses Pydantic BaseSettings for automatic .env file loading and type-safe configuration.
-"""
-
 from typing import Optional
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict

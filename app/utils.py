@@ -3,16 +3,9 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Union, Type
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
 from pydantic import BaseModel, ValidationError
 
-from app.models.schemas import (
-    StockAction,
-    NewsSentiment,
-    ConfidenceLevel,
-    AgentError,
-    ValidationError as SchemaValidationError,
-)
+from app.models.schemas import AgentError
 
 # Configure logging
 logging.basicConfig(
@@ -25,15 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 def validate_nse_symbol(symbol: str) -> bool:
-    """
-    Validate NSE stock symbol format.
-
-    Args:
-        symbol: Stock symbol to validate
-
-    Returns:
-        bool: True if valid NSE symbol format
-    """
     if not symbol:
         return False
 
@@ -45,16 +29,6 @@ def validate_nse_symbol(symbol: str) -> bool:
 def validate_price(
     price: Union[float, str], allow_negative: bool = False
 ) -> Optional[float]:
-    """
-    Validate and parse price values.
-
-    Args:
-        price: Price value to validate (can be string with ₹ symbol)
-        allow_negative: Whether to allow negative prices
-
-    Returns:
-        Optional[float]: Validated price or None if invalid
-    """
     try:
         # Remove currency symbols and commas
         if isinstance(price, str):
@@ -74,15 +48,6 @@ def validate_price(
 
 
 def validate_percentage(pct: Union[float, str]) -> Optional[float]:
-    """
-    Validate percentage values.
-
-    Args:
-        pct: Percentage value to validate (can include % symbol)
-
-    Returns:
-        Optional[float]: Validated percentage or None if invalid
-    """
     try:
         if isinstance(pct, str):
             pct = pct.replace("%", "").strip()
@@ -101,15 +66,6 @@ def validate_percentage(pct: Union[float, str]) -> Optional[float]:
 
 
 def validate_volume(volume: Union[int, str]) -> Optional[int]:
-    """
-    Validate trading volume values.
-
-    Args:
-        volume: Volume to validate
-
-    Returns:
-        Optional[int]: Validated volume or None if invalid
-    """
     try:
         if isinstance(volume, str):
             volume = volume.replace(",", "").strip()
@@ -131,16 +87,6 @@ def validate_volume(volume: Union[int, str]) -> Optional[int]:
 
 
 def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
-    """
-    Extract JSON object from text that may contain additional content.
-    Handles cases where LLM includes explanation text around JSON.
-
-    Args:
-        text: Text potentially containing JSON
-
-    Returns:
-        Optional[Dict]: Parsed JSON object or None
-    """
     try:
         # First, try direct JSON parsing
         return json.loads(text)
@@ -169,17 +115,6 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
 def parse_llm_structured_output(
     output: str, schema: Type[BaseModel], fallback_parse: bool = True
 ) -> Optional[BaseModel]:
-    """
-    Parse LLM output into Pydantic schema with error handling.
-
-    Args:
-        output: Raw LLM output string
-        schema: Pydantic model class to parse into
-        fallback_parse: Whether to attempt fallback parsing on failure
-
-    Returns:
-        Optional[BaseModel]: Parsed and validated model instance or None
-    """
     try:
         # Try direct JSON parsing
         if output.strip().startswith("{"):
@@ -207,15 +142,6 @@ def parse_llm_structured_output(
 
 
 def clean_symbol(symbol: str) -> str:
-    """
-    Clean and normalize stock symbol.
-
-    Args:
-        symbol: Raw symbol string
-
-    Returns:
-        str: Cleaned uppercase symbol
-    """
     return symbol.strip().upper().replace(".NS", "").replace(".BO", "")
 
 
@@ -225,17 +151,6 @@ def clean_symbol(symbol: str) -> str:
 def create_agent_error(
     agent_name: str, error: Exception, recoverable: bool = True
 ) -> AgentError:
-    """
-    Create standardized agent error object.
-
-    Args:
-        agent_name: Name of the agent that encountered error
-        error: The exception that occurred
-        recoverable: Whether the system can retry/continue
-
-    Returns:
-        AgentError: Structured error information
-    """
     return AgentError(
         agent_name=agent_name,
         error_type=type(error).__name__,
@@ -247,18 +162,6 @@ def create_agent_error(
 def safe_get(
     data: Dict, key: str, default: Any = None, validator: Optional[callable] = None
 ) -> Any:
-    """
-    Safely get value from dictionary with optional validation.
-
-    Args:
-        data: Dictionary to get value from
-        key: Key to retrieve
-        default: Default value if key not found
-        validator: Optional validation function
-
-    Returns:
-        Any: Retrieved and validated value or default
-    """
     value = data.get(key, default)
 
     if validator and value is not None:
@@ -275,15 +178,6 @@ def safe_get(
 
 
 def format_indian_currency(amount: float) -> str:
-    """
-    Format number in Indian currency format (₹ with commas).
-
-    Args:
-        amount: Amount to format
-
-    Returns:
-        str: Formatted currency string
-    """
     try:
         # Indian number system: 12,34,56,789
         s = f"{amount:,.2f}"
@@ -315,30 +209,11 @@ def format_indian_currency(amount: float) -> str:
 
 
 def format_percentage(value: float, decimals: int = 2) -> str:
-    """
-    Format percentage value with + or - sign.
-
-    Args:
-        value: Percentage value
-        decimals: Number of decimal places
-
-    Returns:
-        str: Formatted percentage string
-    """
     sign = "+" if value >= 0 else ""
     return f"{sign}{value:.{decimals}f}%"
 
 
 def format_large_number(num: int) -> str:
-    """
-    Format large numbers with Indian suffixes (L for lakhs, Cr for crores).
-
-    Args:
-        num: Number to format
-
-    Returns:
-        str: Formatted number string
-    """
     if num >= 10_000_000:  # 1 crore
         return f"₹{num / 10_000_000:.2f} Cr"
     elif num >= 100_000:  # 1 lakh
@@ -353,16 +228,6 @@ def format_large_number(num: int) -> str:
 def check_data_completeness(
     data: BaseModel, required_fields: List[str]
 ) -> tuple[bool, List[str]]:
-    """
-    Check if required fields in a Pydantic model have non-None values.
-
-    Args:
-        data: Pydantic model instance
-        required_fields: List of field names to check
-
-    Returns:
-        tuple: (is_complete, list of missing fields)
-    """
     missing = []
 
     for field in required_fields:
@@ -375,18 +240,6 @@ def check_data_completeness(
 def validate_price_consistency(
     current: float, day_high: float, day_low: float, previous_close: float
 ) -> tuple[bool, Optional[str]]:
-    """
-    Validate price data consistency.
-
-    Args:
-        current: Current price
-        day_high: Day's high
-        day_low: Day's low
-        previous_close: Previous close
-
-    Returns:
-        tuple: (is_valid, error_message)
-    """
     if current < day_low or current > day_high:
         return (
             False,
@@ -410,12 +263,6 @@ def validate_price_consistency(
 
 
 def is_market_open() -> bool:
-    """
-    Check if NSE market is currently open.
-
-    Returns:
-        bool: True if market is open
-    """
     now = datetime.now()
 
     # Check if it's a weekday (Monday=0, Sunday=6)
@@ -433,12 +280,6 @@ def is_market_open() -> bool:
 
 
 def get_market_status() -> str:
-    """
-    Get current market status description.
-
-    Returns:
-        str: Market status description
-    """
     now = datetime.now()
 
     if now.weekday() > 4:
@@ -463,15 +304,6 @@ def get_market_status() -> str:
 def log_agent_execution(
     agent_name: str, status: str, duration: float, details: Optional[str] = None
 ):
-    """
-    Log agent execution with structured information.
-
-    Args:
-        agent_name: Name of the agent
-        status: Execution status (success/error/timeout)
-        duration: Execution time in seconds
-        details: Additional details
-    """
     log_msg = f"Agent: {agent_name} | Status: {status} | Duration: {duration:.2f}s"
 
     if details:

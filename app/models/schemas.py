@@ -1,8 +1,3 @@
-"""
-Pydantic schemas for structured LLM outputs and data validation.
-Ensures type safety and consistent data structures throughout the system.
-"""
-
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Any
 from enum import Enum
@@ -11,48 +6,36 @@ from datetime import datetime
 
 # ENUMS - Constrained values for better type safety
 class StockAction(str, Enum):
-    """Possible trading actions with clear semantics"""
-
     BUY = "BUY"
     SELL = "SELL"
     HOLD = "HOLD"
 
 
 class NewsSentiment(str, Enum):
-    """News sentiment classification"""
-
     POSITIVE = "POSITIVE"
     NEGATIVE = "NEGATIVE"
     NEUTRAL = "NEUTRAL"
 
 
 class ConfidenceLevel(str, Enum):
-    """Confidence levels for recommendations"""
-
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
 
 
 class TechnicalSignal(str, Enum):
-    """Technical indicator signals"""
-
     BULLISH = "BULLISH"
     BEARISH = "BEARISH"
     NEUTRAL = "NEUTRAL"
 
 
 class TimeHorizon(str, Enum):
-    """Investment time horizons"""
-
     SHORT_TERM = "1-3 days"
     MEDIUM_TERM = "1-2 weeks"
 
 
 # STOCK FINDER AGENT OUTPUT SCHEMA
 class SelectedStock(BaseModel):
-    """Schema for individual stock selection by finder agent"""
-
     symbol: str = Field(
         ...,
         description="NSE stock symbol (e.g., RELIANCE, TCS)",
@@ -73,7 +56,6 @@ class SelectedStock(BaseModel):
 
     @field_validator("symbol")
     def validate_symbol(cls, v):
-        """Ensure symbol is uppercase and clean"""
         return v.strip().upper()
 
     class Config:
@@ -90,8 +72,6 @@ class SelectedStock(BaseModel):
 
 
 class StockFinderOutput(BaseModel):
-    """Complete output from stock finder agent"""
-
     selected_stocks: List[SelectedStock] = Field(
         ..., description="List of 2-3 selected stocks", min_items=2, max_items=3
     )
@@ -105,8 +85,6 @@ class StockFinderOutput(BaseModel):
 
 # MARKET DATA AGENT OUTPUT SCHEMA
 class PriceData(BaseModel):
-    """Price information for a stock"""
-
     current_price: float = Field(..., gt=0, description="Current market price in ₹")
     previous_close: float = Field(..., gt=0, description="Previous day close in ₹")
     day_high: float = Field(..., gt=0, description="Day's high in ₹")
@@ -118,8 +96,6 @@ class PriceData(BaseModel):
 
 
 class VolumeData(BaseModel):
-    """Volume information for a stock"""
-
     today_volume_shares: int = Field(..., ge=0, description="Today's volume in shares")
     today_volume_cr: float = Field(..., ge=0, description="Today's volume in ₹ crores")
     avg_5day_volume_shares: Optional[int] = Field(None, ge=0)
@@ -127,8 +103,6 @@ class VolumeData(BaseModel):
 
 
 class TechnicalIndicators(BaseModel):
-    """Technical analysis indicators"""
-
     rsi_14: Optional[float] = Field(None, ge=0, le=100, description="14-period RSI")
     rsi_signal: Optional[str] = Field(None, description="Overbought/Oversold/Neutral")
     ma_20: Optional[float] = Field(None, gt=0, description="20-day moving average")
@@ -143,8 +117,6 @@ class TechnicalIndicators(BaseModel):
 
 
 class TrendAnalysis(BaseModel):
-    """Price trend analysis"""
-
     trend_7d_pct: float = Field(..., description="7-day price change %")
     trend_30d_pct: float = Field(..., description="30-day price change %")
     momentum: str = Field(..., description="Strong/Weak/Sideways")
@@ -152,8 +124,6 @@ class TrendAnalysis(BaseModel):
 
 
 class MarketDataOutput(BaseModel):
-    """Complete market data for a single stock"""
-
     symbol: str = Field(..., description="Stock symbol")
     company_name: str = Field(..., description="Company name")
     price_data: PriceData
@@ -196,16 +166,12 @@ class MarketDataOutput(BaseModel):
 
 
 class AllMarketDataOutput(BaseModel):
-    """Market data for all analyzed stocks"""
-
     stocks_data: List[MarketDataOutput] = Field(..., min_items=1)
     analysis_timestamp: datetime = Field(default_factory=datetime.now)
 
 
 # NEWS ANALYST AGENT OUTPUT SCHEMA
 class NewsItem(BaseModel):
-    """Individual news item"""
-
     date: str = Field(..., description="News date")
     headline: str = Field(..., description="News headline or summary", min_length=10)
     impact: NewsSentiment = Field(..., description="Expected impact")
@@ -215,8 +181,6 @@ class NewsItem(BaseModel):
 
 
 class NewsAnalysisOutput(BaseModel):
-    """News sentiment analysis for a stock"""
-
     symbol: str = Field(..., description="Stock symbol")
     company_name: str = Field(..., description="Company name")
     recent_news: List[NewsItem] = Field(
@@ -240,16 +204,12 @@ class NewsAnalysisOutput(BaseModel):
 
 
 class AllNewsAnalysisOutput(BaseModel):
-    """News analysis for all stocks"""
-
     news_analysis: List[NewsAnalysisOutput] = Field(..., min_items=1)
     analysis_timestamp: datetime = Field(default_factory=datetime.now)
 
 
 # RECOMMENDATION AGENT OUTPUT SCHEMA
 class EntryStrategy(BaseModel):
-    """Entry strategy details"""
-
     current_price: float = Field(..., gt=0, description="Current price in ₹")
     suggested_entry_min: float = Field(..., gt=0, description="Entry range minimum")
     suggested_entry_max: float = Field(..., gt=0, description="Entry range maximum")
@@ -261,8 +221,6 @@ class EntryStrategy(BaseModel):
 
 
 class RecommendationRationale(BaseModel):
-    """Reasoning behind recommendation"""
-
     technical_factors: str = Field(..., min_length=30)
     fundamental_factors: str = Field(..., min_length=30)
     key_strengths: List[str] = Field(..., min_items=1, max_items=5)
@@ -270,8 +228,6 @@ class RecommendationRationale(BaseModel):
 
 
 class StockRecommendation(BaseModel):
-    """Complete trading recommendation for a stock"""
-
     symbol: str = Field(..., description="Stock symbol")
     company_name: str = Field(..., description="Company name")
     recommendation: StockAction = Field(..., description="BUY/SELL/HOLD")
@@ -314,8 +270,6 @@ class StockRecommendation(BaseModel):
 
 
 class FinalRecommendationsOutput(BaseModel):
-    """Complete recommendations for all stocks"""
-
     recommendations: List[StockRecommendation] = Field(..., min_items=1)
     market_summary: Optional[str] = Field(None, description="Overall market context")
     analysis_timestamp: datetime = Field(default_factory=datetime.now)
@@ -326,8 +280,6 @@ class FinalRecommendationsOutput(BaseModel):
 
 # SYSTEM OUTPUT SCHEMA
 class StockResearchResult(BaseModel):
-    """Complete system output with all analysis stages"""
-
     status: str = Field(..., description="completed/error/partial")
     selected_stocks: Optional[StockFinderOutput] = None
     market_data: Optional[AllMarketDataOutput] = None
@@ -340,8 +292,6 @@ class StockResearchResult(BaseModel):
 
 # ERROR HANDLING SCHEMAS
 class AgentError(BaseModel):
-    """Error information from agent execution"""
-
     agent_name: str
     error_type: str
     error_message: str
@@ -350,8 +300,6 @@ class AgentError(BaseModel):
 
 
 class ValidationError(BaseModel):
-    """Schema validation error details"""
-
     field: str
     error: str
     provided_value: Any

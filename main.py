@@ -1,518 +1,396 @@
-# stock_research_system.py
-import os
+import sys
+import time
+import logging
 import asyncio
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
-from enum import Enum
-import json
 from datetime import datetime
+from typing import List, Dict, Optional
 
-from dotenv import load_dotenv
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
-
-# from langchain.chat_models import init_chat_model
+from langchain.chat_models import init_chat_model
 from langgraph_supervisor import create_supervisor
-from langchain_groq import ChatGroq
 
-load_dotenv()
+from app.models.schemas import (
+    StockFinderOutput,
+    AllMarketDataOutput,
+    AllNewsAnalysisOutput,
+    FinalRecommendationsOutput,
+    StockResearchResult,
+    AgentError,
+)
+from app.core.config import SystemConfig
+from app.core.utils import load_config
+from app.utils import (
+    parse_llm_structured_output,
+    create_agent_error,
+    log_agent_execution,
+    get_market_status,
+)
+from app.prompts import (
+    STOCK_FINDER_PROMPT,
+    MARKET_DATA_PROMPT,
+    NEWS_ANALYST_PROMPT,
+    RECOMMENDATION_PROMPT,
+    SUPERVISOR_PROMPT,
+)
 
-
-class StockAction(Enum):
-    BUY = "BUY"
-    SELL = "SELL"
-    HOLD = "HOLD"
-
-
-class NewsSentiment(Enum):
-    POSITIVE = "POSITIVE"
-    NEGATIVE = "NEGATIVE"
-    NEUTRAL = "NEUTRAL"
-
-
-@dataclass
-class StockRecommendation:
-    symbol: str
-    company_name: str
-    current_price: float
-    action: StockAction
-    target_price: float
-    confidence: str
-    reasoning: str
-    technical_indicators: Dict[str, Any]
-    news_sentiment: NewsSentiment
-    volume_analysis: str
-
-
-@dataclass
-class MarketData:
-    symbol: str
-    current_price: float
-    previous_close: float
-    volume: int
-    price_change_pct: float
-    rsi: Optional[float]
-    moving_avg_50: Optional[float]
-    moving_avg_200: Optional[float]
-    trend_7d: str
-    trend_30d: str
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    # handlers=[
+    #     logging.FileHandler(f"stock_research_{datetime.now().strftime('%Y%m%d')}.log"),
+    #     logging.StreamHandler(sys.stdout),
+    # ],
+)
+logger = logging.getLogger(__name__)
 
 
 class StockResearchSystem:
-    def __init__(self, bright_data_api_token: str, openai_api_key: str):
-        self.bright_data_api_token = bright_data_api_token
-        self.openai_api_key = openai_api_key
-        self.client = None
+    def __init__(self, config: Optional[SystemConfig] = None):
+        self.config = config or load_config()
+
+        self.mcp_client: Optional[MultiServerMCPClient] = None
         self.supervisor = None
+        self.tools = None
 
-    async def initialize(self):
-        """Initialize the MCP client and supervisor"""
-        self.client = MultiServerMCPClient(
-            {
-                "bright_data": {
-                    "command": "npx",
-                    "args": ["@brightdata/mcp"],
-                    "env": {
-                        "API_TOKEN": self.bright_data_api_token,
-                        "WEB_UNLOCKER_ZONE": os.getenv(
-                            "WEB_UNLOCKER_ZONE", "unblocker"
-                        ),
-                        "BROWSER_ZONE": os.getenv("BROWSER_ZONE", "scraping_browser"),
+        self.execution_errors: List[AgentError] = []
+        self.start_time: Optional[float] = None
+
+        logger.info(
+            f"StockResearchSystem initialized with model: {self.config.model.model_name}"
+        )
+
+    async def initialize(self) -> None:
+        try:
+            logger.info("Initializing MCP client...")
+
+            self.mcp_client = MultiServerMCPClient(
+                {
+                    "bright_data": {
+                        "command": self.config.mcp.command,
+                        "args": self.config.mcp.args,
+                        "env": {
+                            "API_TOKEN": self.config.mcp.api_token,
+                            "WEB_UNLOCKER_ZONE": self.config.mcp.web_unlocker_zone,
+                            "BROWSER_ZONE": self.config.mcp.browser_zone,
+                        },
+                        "transport": self.config.mcp.transport,
                     },
-                    "transport": "stdio",
-                },
+                }
+            )
+
+            self.tools = await self.mcp_client.get_tools()
+            logger.info(f"Loaded {len(self.tools)} MCP tools")
+
+            # Initialize base LLM model (Groq for fast inference)
+            base_model = self._create_llm_model()
+
+            # Create specialized agents
+            logger.info("Creating specialized agents...")
+            stock_finder = self._create_stock_finder_agent(base_model)
+            market_data = self._create_market_data_agent(base_model)
+            news_analyst = self._create_news_analyst_agent(base_model)
+            recommendation = self._create_recommendation_agent(base_model)
+
+            # Create supervisor to orchestrate agents
+            logger.info("Creating supervisor...")
+            self.supervisor = create_supervisor(
+                model=self._create_llm_model(),  # Supervisor uses same model
+                agents=[stock_finder, market_data, news_analyst, recommendation],
+                prompt=SUPERVISOR_PROMPT,
+                add_handoff_back_messages=True,
+                output_mode="full_history",
+            ).compile()
+
+            logger.info("System initialization complete")
+
+        except Exception as e:
+            logger.error(f"Initialization failed: {e}")
+            raise RuntimeError(f"Failed to initialize system: {e}")
+
+    def _create_llm_model(self):
+        if self.config.model.provider == "groq":
+            return init_chat_model(
+                self.config.model.model_name,
+                model_provider="groq",
+                api_key=self.config.groq_api_key,
+                temperature=self.config.model.temperature,
+                max_tokens=self.config.model.max_tokens,
+                timeout=self.config.model.timeout,
+            )
+        elif self.config.model.provider == "openai":
+            return init_chat_model(
+                self.config.model.model_name,
+                model_provider="openai",
+                api_key=self.config.openai_api_key,
+                temperature=self.config.model.temperature,
+                max_tokens=self.config.model.max_tokens,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported model provider: {self.config.model.provider}"
+            )
+
+    def _create_stock_finder_agent(self, model):
+        return create_react_agent(
+            model,
+            self.tools,
+            prompt=STOCK_FINDER_PROMPT,
+            name="stock_finder_agent",
+            response_format={
+                "name": "StockFinderOutput",
+                "description": "Structured response for stock selection",
+                "parameters": StockFinderOutput.model_json_schema(),
             }
+            if self.config.model.provider == "groq"
+            else None,
         )
 
-        tools = await self.client.get_tools()
-        model = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            api_key=self.openai_api_key,
-        )
-
-        # Create specialized agents
-        stock_finder_agent = self._create_stock_finder_agent(model, tools)
-        market_data_agent = self._create_market_data_agent(model, tools)
-        news_analyst_agent = self._create_news_analyst_agent(model, tools)
-        recommendation_agent = self._create_recommendation_agent(model, tools)
-
-        # Create supervisor (also needs a tools-capable Groq model)
-        self.supervisor = create_supervisor(
-            model=ChatGroq(
-                model="llama-3.3-70b-versatile",
-                api_key=self.openai_api_key,
-            ),
-            agents=[
-                stock_finder_agent,
-                market_data_agent,
-                news_analyst_agent,
-                recommendation_agent,
-            ],
-            prompt=self._get_supervisor_prompt(),
-            add_handoff_back_messages=True,
-            output_mode="full_history",
-        ).compile()
-
-    def _create_stock_finder_agent(self, model, tools):
-        prompt = """
-        You are an expert NSE (National Stock Exchange) stock research analyst with deep knowledge of the Indian equity market.
-        
-        Your mission: Identify 2-3 high-potential, actively traded NSE-listed stocks suitable for short-term trading (1-7 days).
-
-        IMPORTANT TOOLING INSTRUCTIONS:
-        - You may ONLY use the tools that are explicitly provided to you by the system.
-        - You DO NOT have access to any tool named 'brave_search' or similar web search tools.
-        - Never attempt to call a tool named 'brave_search'. If you need data, use only the available tools.
-        - NEVER invent new tool names (for example, do NOT call any tool named 'search_engine', 'scrape_batch', or similar).
-        - If a tool name is not already present in the tool list provided by the system, you MUST NOT call it.
-        - If no listed tool is appropriate, answer using your own market knowledge and reasoning instead of calling a non-existent tool.
-        - NEVER invent new tool names (for example, do NOT call any tool named 'scrape_batch' or similar).
-        - If no listed tool is appropriate, answer using your own reasoning instead of calling a non-existent tool.
-        
-        SELECTION CRITERIA:
-        • Focus on large-cap and mid-cap stocks (avoid penny stocks < ₹50)
-        • Daily trading volume > ₹50 crores
-        • Market cap > ₹5,000 crores
-        • Recent price momentum or technical breakouts
-        • Sector rotation opportunities
-        • News catalysts or upcoming events
-        
-        AVOID:
-        • Penny stocks and illiquid securities
-        • Stocks in trade-to-trade segment
-        • Companies with regulatory issues
-        • Highly volatile small-cap stocks
-        
-        OUTPUT FORMAT (JSON-like structure):
-        ```
-        SELECTED_STOCKS:
-        1. Symbol: [NSE_SYMBOL]
-           Company: [Full Company Name]
-           Sector: [Industry Sector]
-           Market Cap: [in ₹ crores]
-           Avg Volume: [Daily volume in ₹ crores]
-           Selection Reason: [2-3 lines explaining why this stock]
-        
-        2. [Repeat for second stock]
-        ```
-        
-        Be data-driven and provide clear rationale for each selection.
-        """
-
+    def _create_market_data_agent(self, model):
         return create_react_agent(
-            model, tools, prompt=prompt, name="stock_finder_agent"
+            model,
+            self.tools,
+            prompt=MARKET_DATA_PROMPT,
+            name="market_data_agent",
+            response_format={
+                "name": "AllMarketDataOutput",
+                "description": "Structured market data results",
+                "parameters": AllMarketDataOutput.model_json_schema(),
+            }
+            if self.config.model.provider == "groq"
+            else None,
         )
 
-    def _create_market_data_agent(self, model, tools):
-        prompt = """
-        You are a quantitative market data analyst specializing in NSE-listed stocks.
-
-        IMPORTANT TOOLING INSTRUCTIONS:
-        - You may ONLY use the tools that are explicitly provided to you by the system.
-        - You DO NOT have access to any tool named 'brave_search' or similar web search tools.
-        - Never attempt to call a tool named 'brave_search'. If you need data, use only the available tools.
-        
-        Given stock symbols, gather comprehensive real-time market data:
-        
-        REQUIRED DATA POINTS:
-        • Current Market Price (₹)
-        • Previous Day Close (₹)
-        • Day's High/Low (₹)
-        • Trading Volume (shares & value in ₹ crores)
-        • Price Change (₹ & %)
-        • 52-week High/Low
-        • Market Capitalization
-        
-        TECHNICAL INDICATORS:
-        • RSI (14-period)
-        • Simple Moving Averages (20, 50, 200-day)
-        • MACD signal
-        • Volume trend (5-day average vs today)
-        • Support and Resistance levels
-        
-        TREND ANALYSIS:
-        • 7-day price trend (% change)
-        • 30-day price trend (% change)
-        • Volume pattern analysis
-        • Volatility assessment
-        
-        OUTPUT FORMAT:
-        ```
-        MARKET_DATA_ANALYSIS:
-        
-        [STOCK_SYMBOL] - [Company Name]
-        ─────────────────────────────────
-        Price Data:
-          Current: ₹[X] | Change: +/-₹[X] (+/-X.XX%)
-          Day Range: ₹[Low] - ₹[High]
-          52W Range: ₹[Low] - ₹[High]
-        
-        Volume Analysis:
-          Today: [X] shares (₹[X] crores)
-          Avg 5-day: [X] shares
-          Volume Status: [Above/Below Average]
-        
-        Technical Indicators:
-          RSI: [X] ([Overbought/Oversold/Neutral])
-          MA20: ₹[X] | MA50: ₹[X] | MA200: ₹[X]
-          Price vs MA50: [Above/Below] by X%
-          MACD: [Bullish/Bearish/Neutral]
-        
-        Trends:
-          7-day: [+/-X.X%]
-          30-day: [+/-X.X%]
-          Momentum: [Strong/Weak/Sideways]
-        ```
-        
-        Provide accurate, up-to-date data with clear interpretation.
-        """
-
-        return create_react_agent(model, tools, prompt=prompt, name="market_data_agent")
-
-    def _create_news_analyst_agent(self, model, tools):
-        prompt = """
-        You are a financial news analyst with expertise in Indian stock market sentiment analysis.
-
-        IMPORTANT TOOLING INSTRUCTIONS:
-        - You may ONLY use the tools that are explicitly provided to you by the system.
-        - You DO NOT have access to any tool named 'brave_search' or similar web search tools.
-        - Never attempt to call a tool named 'brave_search'. If you need data, use only the available tools.
-        
-        For each given stock, research and analyze:
-        
-        NEWS RESEARCH SCOPE:
-        • Recent news (last 3-5 trading days)
-        • Corporate announcements
-        • Earnings updates
-        • Management changes
-        • Regulatory updates
-        • Sector-specific news
-        • Analyst recommendations
-        
-        SENTIMENT CLASSIFICATION:
-        • POSITIVE: Likely to drive stock price up
-        • NEGATIVE: Likely to drive stock price down  
-        • NEUTRAL: Minimal expected impact
-        
-        IMPACT ASSESSMENT:
-        • Short-term (1-3 days)
-        • Medium-term (1-2 weeks)
-        • Confidence level (High/Medium/Low)
-        
-        OUTPUT FORMAT:
-        ```
-        NEWS_SENTIMENT_ANALYSIS:
-        
-        [STOCK_SYMBOL] - [Company Name]
-        ═══════════════════════════════════
-        
-        📰 RECENT NEWS HIGHLIGHTS:
-        • [Date]: [News headline/summary] - Impact: [Positive/Negative/Neutral]
-        • [Date]: [News headline/summary] - Impact: [Positive/Negative/Neutral]
-        
-        📊 SENTIMENT SUMMARY:
-        Overall Sentiment: [POSITIVE/NEGATIVE/NEUTRAL]
-        Confidence Level: [HIGH/MEDIUM/LOW]
-        
-        📈 POTENTIAL PRICE IMPACT:
-        Short-term (1-3 days): [Expected direction and reasoning]
-        Key Catalysts: [Upcoming events/announcements]
-        Risk Factors: [Potential negative triggers]
-        ```
-        
-        Focus on factual analysis and avoid speculation. Clearly distinguish between confirmed news and rumors.
-        """
-
+    def _create_news_analyst_agent(self, model):
         return create_react_agent(
-            model, tools, prompt=prompt, name="news_analyst_agent"
+            model,
+            self.tools,
+            prompt=NEWS_ANALYST_PROMPT,
+            name="news_analyst_agent",
+            response_format={
+                "name": "AllNewsAnalysisOutput",
+                "description": "Structured news sentiment analysis",
+                "parameters": AllNewsAnalysisOutput.model_json_schema(),
+            }
+            if self.config.model.provider == "groq"
+            else None,
         )
 
-    def _create_recommendation_agent(self, model, tools):
-        prompt = """
-        You are a senior trading strategist providing actionable investment recommendations for NSE stocks.
-
-        IMPORTANT TOOLING INSTRUCTIONS:
-        - You may ONLY use the tools that are explicitly provided to you by the system.
-        - You DO NOT have access to any tool named 'brave_search' or similar web search tools.
-        - Never attempt to call a tool named 'brave_search'. If you need data, use only the available tools.
-        
-        Synthesize all available data to generate precise trading recommendations:
-        
-        ANALYSIS INPUTS:
-        • Market data & technical indicators
-        • News sentiment & upcoming catalysts
-        • Volume patterns & price momentum
-        • Risk-reward assessment
-        
-        RECOMMENDATION FRAMEWORK:
-        
-        BUY Criteria:
-        • Strong technical setup + positive news
-        • RSI < 70, price above key moving averages
-        • Volume confirmation on breakouts
-        • Favorable risk-reward ratio (1:2 minimum)
-        
-        SELL Criteria:
-        • Overbought conditions + negative news
-        • Technical breakdown below support
-        • High volume selling pressure
-        • Deteriorating fundamentals
-        
-        HOLD Criteria:
-        • Mixed signals or insufficient conviction
-        • Sideways consolidation phase
-        • Awaiting key events/announcements
-        
-        OUTPUT FORMAT:
-        ```
-        🎯 TRADING RECOMMENDATIONS
-        ═══════════════════════════════════
-        
-        [STOCK_SYMBOL] - [Company Name]
-        ─────────────────────────────────
-        📋 RECOMMENDATION: [BUY/SELL/HOLD]
-        🎯 TARGET PRICE: ₹[X]
-        ⏰ TIME HORIZON: [1-3 days / 1-2 weeks]
-        📊 CONFIDENCE: [HIGH/MEDIUM/LOW]
-        
-        📈 ENTRY STRATEGY:
-        Current Price: ₹[X]
-        Suggested Entry: ₹[X] - ₹[X]
-        Stop Loss: ₹[X] (X% below entry)
-        Target: ₹[X] (X% upside potential)
-        
-        💡 RATIONALE:
-        Technical: [Key technical factors]
-        Fundamental: [Key news/catalyst factors]
-        Risk-Reward: [1:X ratio]
-        
-        ⚠️ KEY RISKS:
-        • [Risk factor 1]
-        • [Risk factor 2]
-        
-        📅 NEXT MONITORING POINTS:
-        • [Specific price levels or events to watch]
-        ```
-        
-        Provide specific, actionable advice with clear entry/exit points and risk management guidelines.
-        """
-
+    def _create_recommendation_agent(self, model):
         return create_react_agent(
-            model, tools, prompt=prompt, name="recommendation_agent"
+            model,
+            self.tools,
+            prompt=RECOMMENDATION_PROMPT,
+            name="recommendation_agent",
+            response_format={
+                "name": "FinalRecommendationsOutput",
+                "description": "Structured trading recommendations",
+                "parameters": FinalRecommendationsOutput.model_json_schema(),
+            }
+            if self.config.model.provider == "groq"
+            else None,
         )
 
-    def _get_supervisor_prompt(self):
-        return """
-        You are an expert supervisor orchestrating a comprehensive NSE stock research and recommendation system.
-        
-        WORKFLOW SEQUENCE:
-        1. STOCK_FINDER_AGENT: First, identify 2-3 promising NSE stocks for short-term trading
-        2. MARKET_DATA_AGENT: Then, gather detailed market data and technical analysis for selected stocks
-        3. NEWS_ANALYST_AGENT: Next, analyze recent news and sentiment for each stock
-        4. RECOMMENDATION_AGENT: Finally, synthesize all data into actionable BUY/SELL/HOLD recommendations
-        
-        EXECUTION RULES:
-        • Execute agents sequentially (never in parallel)
-        • Ensure each agent completes their analysis before proceeding
-        • Pass relevant context between agents
-        • Do not perform any analysis yourself
-        • Maintain consistent stock symbols throughout the workflow
-        • Generate comprehensive final recommendations
-        
-        QUALITY STANDARDS:
-        • All price data must be in Indian Rupees (₹)
-        • Use NSE stock symbols consistently
-        • Provide specific entry/exit prices
-        • Include risk management guidelines
-        • Ensure recommendations are actionable for next trading day
-
-        IMPORTANT TOOLING INSTRUCTIONS:
-        - You may ONLY use the tools that are explicitly provided to you by the system.
-        - You DO NOT have access to any tool named 'brave_search' or similar web search tools.
-        - Never attempt to call a tool named 'brave_search'. If you need data, use only the available tools.
-        
-        Complete the entire workflow without asking for user confirmation between steps.
-        """
-
-    async def analyze_stocks(self, user_query: str = None) -> Dict[str, Any]:
-        """Main method to run the complete stock analysis workflow"""
+    async def analyze_stocks(
+        self,
+        user_query: Optional[str] = None,
+        specific_stocks: Optional[List[str]] = None,
+    ) -> StockResearchResult:
+        # Ensure system is initialized
         if not self.supervisor:
             await self.initialize()
 
+        # Start timing
+        self.start_time = time.time()
+        self.execution_errors = []
+
+        # Prepare query
         if not user_query:
-            user_query = "Provide comprehensive stock analysis and trading recommendations for promising NSE-listed stocks suitable for short-term trading in the current market conditions."
+            if specific_stocks:
+                stocks_str = ", ".join(specific_stocks)
+                user_query = (
+                    f"Provide comprehensive analysis and trading recommendations for "
+                    f"these NSE stocks: {stocks_str}. Include technical analysis, "
+                    f"news sentiment, and actionable entry/exit strategies."
+                )
+            else:
+                market_status = get_market_status()
+                user_query = (
+                    f"Current Market Status: {market_status}. "
+                    f"Identify and analyze 2-3 promising NSE-listed stocks suitable "
+                    f"for short-term trading (1-7 days) in current market conditions. "
+                    f"Provide comprehensive technical analysis, news sentiment, and "
+                    f"specific BUY/SELL/HOLD recommendations with entry/exit points."
+                )
 
-        # Store all messages for processing
-        all_messages = []
+        logger.info(f"Starting analysis with query: {user_query[:100]}...")
 
-        # Increase recursion limit to avoid premature GraphRecursionError
-        # when agents take many tool-calling steps before finishing.
-        async for chunk in self.supervisor.astream(
-            {"messages": [{"role": "user", "content": user_query}]},
-            config={"recursion_limit": 60},
-        ):
-            all_messages.append(chunk)
+        try:
+            # Execute supervisor workflow
+            all_messages = []
 
-        # Extract final results
-        final_chunk = all_messages[-1] if all_messages else {}
-        final_messages = final_chunk.get("supervisor", {}).get("messages", [])
+            async for chunk in self.supervisor.astream(
+                {"messages": [{"role": "user", "content": user_query}]},
+                config={"timeout": 600},
+            ):  # 10 minute overall timeout
+                all_messages.append(chunk)
 
-        return {
-            "status": "completed",
-            "timestamp": datetime.now().isoformat(),
-            "messages": final_messages,
-            "raw_output": all_messages,
-        }
+            # Process results
+            result = await self._process_results(all_messages)
 
-    def format_results_for_display(self, results: Dict[str, Any]) -> str:
-        """Format the analysis results for better display"""
-        if not results.get("messages"):
-            return "No analysis results available."
+            # Calculate execution time
+            execution_time = time.time() - self.start_time
+            result.execution_time_seconds = execution_time
 
-        # Extract the final message content
-        final_messages = results["messages"]
-        if not final_messages:
-            return "Analysis completed but no recommendations generated."
+            logger.info(f"Analysis completed in {execution_time:.2f}s")
 
-        # Get the last assistant message which should contain recommendations
-        for message in reversed(final_messages):
-            if hasattr(message, "content") and message.content:
-                return str(message.content)
-            elif isinstance(message, dict) and message.get("content"):
-                return str(message["content"])
+            return result
 
-        return "Analysis completed. Please check the detailed output."
+        except asyncio.TimeoutError:
+            logger.error("Analysis timed out")
+            return StockResearchResult(
+                status="error",
+                error_message="Analysis timed out after maximum duration",
+                execution_time_seconds=time.time() - self.start_time,
+            )
 
+        except Exception as e:
+            logger.error(f"Analysis failed: {e}", exc_info=True)
+            return StockResearchResult(
+                status="error",
+                error_message=f"Analysis failed: {str(e)}",
+                execution_time_seconds=time.time() - self.start_time
+                if self.start_time
+                else None,
+            )
 
-# Utility functions for the Streamlit app
-def pretty_print_message(message, indent=False):
-    """Pretty print a single message"""
-    if hasattr(message, "pretty_repr"):
-        pretty_message = message.pretty_repr(html=True)
-    else:
-        pretty_message = str(message)
+    async def _process_results(self, all_messages: List[Dict]) -> StockResearchResult:
+        result = StockResearchResult(status="completed")
 
-    if indent:
-        indented = "\n".join("\t" + line for line in pretty_message.split("\n"))
-        return indented
-    return pretty_message
+        try:
+            # Extract final messages from last chunk
+            final_chunk = all_messages[-1] if all_messages else {}
+            final_messages = final_chunk.get("supervisor", {}).get("messages", [])
 
+            # Parse outputs from each agent
+            # This is a simplified version - you'll need to implement
+            # proper message routing based on your agent outputs
 
-def extract_recommendations(final_messages) -> List[Dict[str, Any]]:
-    """Extract structured recommendations from the final messages"""
-    recommendations = []
+            for message in final_messages:
+                content = self._extract_message_content(message)
 
-    # This is a simplified parser - you might want to enhance this
-    # based on the actual output format of your agents
+                if not content:
+                    continue
 
-    for message in final_messages:
-        content = ""
+                # Try to parse based on message structure
+                # Stock finder output
+                if "selected_stocks" in content.lower():
+                    parsed = parse_llm_structured_output(content, StockFinderOutput)
+                    if parsed:
+                        result.selected_stocks = parsed
+
+                # Market data output
+                elif (
+                    "price_data" in content.lower() or "market_data" in content.lower()
+                ):
+                    parsed = parse_llm_structured_output(content, AllMarketDataOutput)
+                    if parsed:
+                        result.market_data = parsed
+
+                # News analysis output
+                elif "sentiment" in content.lower() or "news" in content.lower():
+                    parsed = parse_llm_structured_output(content, AllNewsAnalysisOutput)
+                    if parsed:
+                        result.news_analysis = parsed
+
+                # Recommendations output
+                elif (
+                    "recommendation" in content.lower()
+                    or "buy" in content.lower()
+                    or "sell" in content.lower()
+                ):
+                    parsed = parse_llm_structured_output(
+                        content, FinalRecommendationsOutput
+                    )
+                    if parsed:
+                        result.recommendations = parsed
+
+            # Validate completeness
+            if not result.recommendations:
+                result.status = "partial"
+                logger.warning("Analysis completed but no recommendations generated")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error processing results: {e}")
+            result.status = "error"
+            result.error_message = f"Failed to process results: {str(e)}"
+            return result
+
+    def _extract_message_content(self, message) -> Optional[str]:
         if hasattr(message, "content"):
-            content = str(message.content)
+            return str(message.content)
         elif isinstance(message, dict) and message.get("content"):
-            content = str(message["content"])
+            return str(message["content"])
+        return None
 
-        # Look for recommendation patterns in the content
-        if "RECOMMENDATION:" in content and "TARGET PRICE:" in content:
-            # Parse the recommendation (this is a basic example)
-            lines = content.split("\n")
-            rec = {}
+    def format_results_for_display(self, result: StockResearchResult) -> str:
+        if result.status == "error":
+            return f"❌ Analysis Error: {result.error_message}"
 
-            for line in lines:
-                if "STOCK_SYMBOL" in line or "Symbol:" in line:
-                    rec["symbol"] = line.split(":")[-1].strip()
-                elif "RECOMMENDATION:" in line:
-                    rec["action"] = line.split(":")[-1].strip()
-                elif "TARGET PRICE:" in line:
-                    price_str = line.split(":")[-1].strip().replace("₹", "")
-                    try:
-                        rec["target_price"] = float(price_str)
-                    except:
-                        rec["target_price"] = price_str
-                elif "Current Price:" in line:
-                    price_str = line.split(":")[-1].strip().replace("₹", "")
-                    try:
-                        rec["current_price"] = float(price_str)
-                    except:
-                        rec["current_price"] = price_str
+        output = []
+        output.append("=" * 80)
+        output.append("📊 NSE STOCK RESEARCH & RECOMMENDATIONS")
+        output.append("=" * 80)
+        output.append(
+            f"Analysis Timestamp: {result.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        output.append(f"Execution Time: {result.execution_time_seconds:.2f}s")
+        output.append(f"Market Status: {get_market_status()}")
+        output.append("")
 
-            if rec:
-                recommendations.append(rec)
+        # Display recommendations
+        if result.recommendations:
+            output.append("🎯 TRADING RECOMMENDATIONS")
+            output.append("=" * 80)
 
-    return recommendations
+            for rec in result.recommendations.recommendations:
+                output.append(f"\n📈 {rec.symbol} - {rec.company_name}")
+                output.append("-" * 80)
+                output.append(
+                    f"   Recommendation: {rec.recommendation.value} ({rec.confidence.value} confidence)"
+                )
+                output.append(f"   Time Horizon: {rec.time_horizon.value}")
+                output.append(
+                    f"   Current Price: ₹{rec.entry_strategy.current_price:,.2f}"
+                )
+                output.append(
+                    f"   Target Price: ₹{rec.entry_strategy.target_price:,.2f}"
+                )
+                output.append(f"   Stop Loss: ₹{rec.entry_strategy.stop_loss:,.2f}")
+                output.append(
+                    f"   Expected Upside: {rec.entry_strategy.target_upside_pct:.2f}%"
+                )
+                output.append(f"   Risk-Reward: {rec.entry_strategy.risk_reward_ratio}")
+                output.append("")
+
+        output.append("\n" + "=" * 80)
+        output.append(
+            result.recommendations.disclaimer if result.recommendations else ""
+        )
+
+        return "\n".join(output)
 
 
-# async def run(bright_data_api_key, openai_api_key, user_query):
-#     system = StockResearchSystem(bright_data_api_key, openai_api_key)
-#     result = await system.analyze_stocks(user_query)
-#     print(result)
+async def run(user_query):
+    system = StockResearchSystem()
+    result = await system.analyze_stocks()
+    print(result)
 
 
-# # helper function to run analyze-stocks
-# if __name__ == "__main__":
-#     groq_api_key = ""
-#     brightdata_api_key = (
-#         ""
-#     )
-#     user_query = "find a top 3 stocks to trade for short term"
-#     asyncio.run(run(brightdata_api_key, groq_api_key, user_query))
+# helper function to run analyze-stocks
+if __name__ == "__main__":
+    user_query = "find a top 3 stocks to trade for short term"
+    asyncio.run(run(user_query))

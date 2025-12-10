@@ -1,41 +1,14 @@
 from typing import Optional
-from core.config import SystemConfig
+from app.core.config import SystemConfig
 from app.core.model_config import ModelConfig
 
 
 def load_config(env_file: str = ".env") -> SystemConfig:
-    """
-    Load and validate system configuration from environment variables and .env file.
-
-    This function creates a SystemConfig instance which automatically:
-    1. Loads variables from the specified .env file
-    2. Loads variables from system environment
-    3. Validates all settings
-    4. Applies default values where not provided
-
-    Args:
-        env_file: Path to .env file (default: ".env" in current directory)
-
-    Returns:
-        SystemConfig: Validated configuration object ready to use
-
-    Raises:
-        ValueError: If required configuration is missing or invalid
-
-    Example:
-        >>> config = load_config()
-        >>> print(config.groq_api_key)
-        'gsk_...'
-        >>> print(config.model.model_name)
-        'llama-3.3-70b-versatile'
-    """
     try:
-        # Create config with custom env file path
         config = SystemConfig(_env_file=env_file)
         return config
 
     except Exception as e:
-        # Provide helpful error message
         error_msg = (
             f"Configuration error: {str(e)}\n\n"
             f"Please check:\n"
@@ -48,35 +21,10 @@ def load_config(env_file: str = ".env") -> SystemConfig:
 
 
 def get_groq_model_info(model_name: str) -> Optional[str]:
-    """
-    Get description/info about a Groq model.
-
-    Args:
-        model_name: Name of the Groq model
-
-    Returns:
-        Description string or None if model not found
-
-    Example:
-        >>> info = get_groq_model_info("llama-3.3-70b-versatile")
-        >>> print(info)
-        'Best balance of speed and quality (Recommended)'
-    """
     return ModelConfig.GROQ_MODELS.get(model_name)
 
 
 def print_config_info(config: SystemConfig) -> None:
-    """
-    Print configuration information (useful for debugging).
-    Redacts sensitive information like API keys.
-
-    Args:
-        config: SystemConfig instance
-
-    Example:
-        >>> config = load_config()
-        >>> print_config_info(config)
-    """
     print("=" * 60)
     print("SYSTEM CONFIGURATION")
     print("=" * 60)
