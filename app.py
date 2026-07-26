@@ -11,7 +11,7 @@ import re
 from typing import Dict, List, Any
 
 # Import our refactored system
-from main import StockResearchSystem, extract_recommendations
+from main import StockResearchSystem
 
 # Page configuration
 st.set_page_config(
@@ -310,7 +310,7 @@ def display_recommendations(text_output: str):
         st.markdown(
             f"""
         <div class="recommendation-card {card_class}">
-            <h3>{action_color} {rec['symbol']} - {rec['company']}</h3>
+            <h3>{action_color} {rec["symbol"]} - {rec["company"]}</h3>
         </div>
         """,
             unsafe_allow_html=True,
@@ -536,7 +536,9 @@ def main():
                 action_color = (
                     "🟢"
                     if data["action"] == "BUY"
-                    else "🔴" if data["action"] == "SELL" else "🟡"
+                    else "🔴"
+                    if data["action"] == "SELL"
+                    else "🟡"
                 )
                 st.markdown(
                     f"""
@@ -797,7 +799,9 @@ def enhanced_main():
                 action_color = (
                     "🟢"
                     if data["action"] == "BUY"
-                    else "🔴" if data["action"] == "SELL" else "🟡"
+                    else "🔴"
+                    if data["action"] == "SELL"
+                    else "🟡"
                 )
                 st.markdown(
                     f"""

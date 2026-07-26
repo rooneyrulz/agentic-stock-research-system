@@ -74,6 +74,31 @@ A sophisticated multi-agent AI system for analyzing Indian NSE-listed stocks usi
    - Select analysis parameters
    - Click "Start Analysis" and wait for results!
 
+### 🐳 Running with Docker
+
+You can also run the system inside a Docker container without manually installing Node.js or Python dependencies on your host.
+
+1. **Using Docker Compose (Recommended)**
+   ```bash
+   # Ensure your .env file is set up
+   cp example.env .env
+
+   # Build and start the container
+   docker compose up --build
+   ```
+
+2. **Using Docker CLI**
+   ```bash
+   # Build the image
+   docker build -t stock-research-system .
+
+   # Run the container with your .env file
+   docker run -p 8501:8501 --env-file .env stock-research-system
+   ```
+
+3. **Access the app**
+   - Open `http://localhost:8501` in your browser.
+
 ## 🔧 Configuration
 
 ### API Keys Setup

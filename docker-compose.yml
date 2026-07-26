@@ -1,0 +1,15 @@
+services:
+  stock-research-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nse-stock-research-system
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
