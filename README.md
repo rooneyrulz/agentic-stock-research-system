@@ -1,3 +1,8 @@
+> 🔗 **Related project:** Check out [stock-research-agent-api](https://github.com/rooneyrulz/stock-research-agent-api) —
+> a CrewAI-based take on this same idea, with role-specific agents, structured/validated outputs, and a FastAPI service layer.
+> Both projects are actively maintained; this one continues to evolve independently.
+
+
 # 📈 NSE Stock Research & Analysis System
 
 A sophisticated multi-agent AI system for analyzing Indian NSE-listed stocks using real-time data, technical indicators, news sentiment, and advanced AI reasoning.
