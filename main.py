@@ -679,12 +679,22 @@ async def run(user_query):
     system = StockResearchSystem()
     result = await system.analyze_stocks(user_query=user_query)
 
+    print("Raw Results: ")
+    print(result)
+
+    print("---------------------------------------------------------------------------------------------------------")
+
     # Print formatted results
+    print("Formatted Results:")
     print(system.format_results_for_display(result))
 
+    print("------------------------------------------------------------------------------------------------------------")
+    print("\n📊 Execution Metrics:")
+    
     # Print execution metrics
     metrics = system.get_execution_metrics()
-    print("\n📊 Execution Metrics:")
+    
+    # 📋 Agent Execution Metrics:
     print(f"Total Agents: {len(metrics['agent_metrics'])}")
     print(f"Total Errors: {metrics['total_errors']}")
 

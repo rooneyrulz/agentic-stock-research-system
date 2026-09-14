@@ -32,6 +32,7 @@ class ModelConfig(BaseSettings):
         "llama-3.1-70b-versatile": "Fast and reliable alternative",
         "mixtral-8x7b-32768": "Good for long context (32K tokens)",
         "gemma2-9b-it": "Ultra-fast for simple tasks",
+        "openai/gpt-oss-20b": "Fast and reliable alternative",
     }
 
     @field_validator("model_name")
