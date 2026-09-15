@@ -371,6 +371,8 @@ if __name__ == "__main__":
     system = StockResearchSystem(BRIGHTDATA_TOKEN, GROQ_TOKEN)
     results = asyncio.run(system.analyze_stocks())
 
+    print(results)
+
     print("*" * 80)
     print("*" * 80)
     print("*" * 80)
